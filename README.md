@@ -40,14 +40,14 @@ This tweak is incomplete, issues WILL happen.
 
 ## donation
 i only accept crpyto for now, wallet addreses:
-
+```
 BTC: bc1qlv830emqsffqslns2e3kglkgcdnlag0nfnyj4k
-ETH: 0x6245EF47c749D1b5c2830b145cB943a8aD826bea
-LTC: ltc1q7j6vlgvymxdtwm46u0n22h7m4890cexfp22vfm
-DOGE: D76nuR1HWSymSLhFYYhkfpc4JHg1HjvgWD
-SOL: P8U8Bm6DZJFhVcGxSCGhc9cP46KXD5qRwQLRu82EBZg
-TRX: TVuW2KcYBMcr2VAMhYVqYmoT15N3MbZ8eX
-USDC (Polygon): 0x6245EF47c749D1b5c2830b145cB943a8aD826bea
-USDT (Tron/trc-20): TVuW2KcYBMcr2VAMhYVqYmoT15N3MbZ8eX
-
+ETH: 0x6245EF47c749D1b5c2830b145cB943a8aD826bea 
+LTC: ltc1q7j6vlgvymxdtwm46u0n22h7m4890cexfp22vfm 
+DOGE: D76nuR1HWSymSLhFYYhkfpc4JHg1HjvgWD 
+SOL: P8U8Bm6DZJFhVcGxSCGhc9cP46KXD5qRwQLRu82EBZg 
+TRX: TVuW2KcYBMcr2VAMhYVqYmoT15N3MbZ8eX 
+USDC (Polygon): 0x6245EF47c749D1b5c2830b145cB943a8aD826bea 
+USDT (Tron/trc-20): TVuW2KcYBMcr2VAMhYVqYmoT15N3MbZ8eX 
+```
 ### contributions to this tweak are welcomed
