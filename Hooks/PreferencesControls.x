@@ -354,7 +354,8 @@ static BOOL LGSettingsInvokeGestureActions(UIView *view) {
         NSArray *targets = nil;
         @try {
             targets = [recognizer valueForKey:@"_targets"];
-        } @catch (__unused NSException *exception) {
+        } @catch (NSException *exception) {
+            LGDebugLog(@"settings gesture target read failed %@ %@", exception.name, exception.reason);
             targets = nil;
         }
         for (id targetAction in targets) {
@@ -363,7 +364,8 @@ static BOOL LGSettingsInvokeGestureActions(UIView *view) {
             @try {
                 target = [targetAction valueForKey:@"target"];
                 actionName = [targetAction valueForKey:@"action"];
-            } @catch (__unused NSException *exception) {
+            } @catch (NSException *exception) {
+                LGDebugLog(@"settings gesture action read failed %@ %@", exception.name, exception.reason);
                 target = nil;
                 actionName = nil;
             }
@@ -593,7 +595,7 @@ static void LGUpdateSettingsCellSeparatorInsets(UITableViewCell *cell) {
     }
 }
 
-static void LGLogSettingsSegmentedControlViewTree(UIView *view, NSInteger depth) {
+static void LGDebugSettingsSegmentedControlViewTree(UIView *view, NSInteger depth) {
     if (!view || depth > 3) return;
     NSString *indent = [@"" stringByPaddingToLength:(NSUInteger)(depth * 2) withString:@" " startingAtIndex:0];
     BOOL selected = NO;
@@ -630,7 +632,7 @@ static void LGLogSettingsSegmentedControlViewTree(UIView *view, NSInteger depth)
                    (unsigned long)view.layer.sublayers.count);
     }
     for (UIView *subview in view.subviews) {
-        LGLogSettingsSegmentedControlViewTree(subview, depth + 1);
+        LGDebugSettingsSegmentedControlViewTree(subview, depth + 1);
     }
 }
 
@@ -674,7 +676,7 @@ static void LGProbeSettingsSegmentedControl(UISegmentedControl *control, NSStrin
                segments);
 
     if (shouldDumpTree) {
-        LGLogSettingsSegmentedControlViewTree(control, 0);
+        LGDebugSettingsSegmentedControlViewTree(control, 0);
     }
 }
 
@@ -1472,7 +1474,8 @@ static id LGCellSpecifier(id cell) {
     }
     @try {
         return [cell valueForKey:@"specifier"];
-    } @catch (__unused NSException *exception) {
+    } @catch (NSException *exception) {
+        LGDebugLog(@"specifier KVC read failed %@ %@", exception.name, exception.reason);
         return nil;
     }
 }
@@ -1482,7 +1485,8 @@ static BOOL LGSpecifierBoolProperty(id specifier, NSString *key) {
     id value = nil;
     @try {
         value = [specifier propertyForKey:key];
-    } @catch (__unused NSException *exception) {
+    } @catch (NSException *exception) {
+        LGDebugLog(@"specifier bool property read failed key=%@ %@ %@", key, exception.name, exception.reason);
         value = nil;
     }
     return value ? [value boolValue] : NO;
@@ -1493,7 +1497,8 @@ static NSInteger LGSpecifierIntegerProperty(id specifier, NSString *key) {
     id value = nil;
     @try {
         value = [specifier propertyForKey:key];
-    } @catch (__unused NSException *exception) {
+    } @catch (NSException *exception) {
+        LGDebugLog(@"specifier integer property read failed key=%@ %@ %@", key, exception.name, exception.reason);
         value = nil;
     }
     return value ? [value integerValue] : 0;

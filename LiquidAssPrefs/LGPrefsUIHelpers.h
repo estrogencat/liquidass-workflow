@@ -37,6 +37,21 @@ void LGPresentRespringConfirmation(UIViewController *controller);
 void LGPresentInvalidateCachesConfirmation(UIViewController *controller);
 void LGPresentReopenSettingsConfirmation(UIViewController *controller);
 void LGPresentInfoSheet(UIViewController *controller, NSString *title, NSString *message);
+void LGPresentConfirmationSheet(UIViewController *controller,
+                                NSString *title,
+                                NSString *message,
+                                NSString *cancelTitle,
+                                NSString *confirmTitle,
+                                BOOL destructive,
+                                void (^confirmBlock)(void));
+void LGPresentTextInputSheet(UIViewController *controller,
+                             NSString *title,
+                             NSString *message,
+                             NSString *initialText,
+                             NSString *placeholder,
+                             UIKeyboardType keyboardType,
+                             BOOL monospaced,
+                             void (^applyBlock)(NSString *text));
 void LGPresentMultilineTextInputSheet(UIViewController *controller,
                                       NSString *title,
                                       NSString *message,

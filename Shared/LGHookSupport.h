@@ -20,6 +20,7 @@ typedef struct {
     __strong NSString *enabledPreferenceKey;
     __strong CADisplayLink *link;
     __strong id driver;
+    __strong id owner;
 } LGDisplayLinkState;
 UIView *LGEnsureTintOverlayView(UIView *host,
                                 const void *associationKey,

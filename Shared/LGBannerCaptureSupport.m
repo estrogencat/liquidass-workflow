@@ -5,8 +5,6 @@
 #import <QuartzCore/QuartzCore.h>
 #import <objc/runtime.h>
 
-void LGLog(NSString *format, ...);
-
 @interface LGLiveBackdropCaptureView : UIView
 @end
 
@@ -24,8 +22,8 @@ void LGLog(NSString *format, ...);
         [layer setValue:@NO forKey:@"layerUsesCoreImageFilters"];
         [layer setValue:@YES forKey:@"windowServerAware"];
         [layer setValue:NSUUID.UUID.UUIDString forKey:@"groupName"];
-    } @catch (__unused NSException *exception) {
-        LGLog(@"banner backdrop layer configuration failed");
+    } @catch (NSException *exception) {
+        LGDebugLog(@"banner backdrop layer configuration failed %@ %@", exception.name, exception.reason);
     }
 }
 

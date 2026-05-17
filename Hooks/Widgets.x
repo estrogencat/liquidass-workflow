@@ -27,6 +27,9 @@ static void *kWidgetBackdropViewKey = &kWidgetBackdropViewKey;
 
 static LGDisplayLinkState sWidgetDisplayLinkState = {0};
 static NSHashTable<UIView *> *sWidgetHosts = nil;
+static BOOL sWidgetCoverSheetVisible = NO;
+static BOOL sWidgetDetectedCoverSheetVisible = NO;
+static CFTimeInterval sWidgetLastCoverSheetDetectionTime = 0.0;
 
 LG_ENABLED_BOOL_PREF_FUNC(LGWidgetEnabled, "Widgets.Enabled", NO)
 static CGFloat LGWidgetCornerRadius(void) { return LGDynamicDefaultFloat(@"Widgets.CornerRadius", 20.2); }
@@ -109,6 +112,7 @@ static BOOL LGWidgetHasAncestorClassNamedWithinDepth(UIView *view, NSString *cla
 }
 
 static void LGStartWidgetDisplayLink(void) {
+    if (sWidgetCoverSheetVisible) return;
     NSInteger fps = LG_prefersLiveCapture(@"Widgets.RenderingMode")
         ? LGPreferredLiveCaptureFramesPerSecond(LGWidgetLiveCaptureFPS())
         : LGPreferredFramesPerSecondForKey(@"Homescreen.FPS", 1);
@@ -127,6 +131,69 @@ static void LGStartWidgetDisplayLink(void) {
 
 static void LGStopWidgetDisplayLink(void) {
     LGStopDisplayLinkState(&sWidgetDisplayLinkState);
+}
+
+static BOOL LGWidgetViewIsVisibleInWindow(UIView *view) {
+    if (!view || !view.window || view.hidden || view.alpha <= 0.01f || view.layer.opacity <= 0.01f) return NO;
+    CGRect frame = [view.layer convertRect:view.layer.bounds toLayer:view.window.layer];
+    return CGRectIntersectsRect(CGRectInset(view.window.bounds, -16.0, -16.0), frame);
+}
+
+static BOOL LGWidgetViewIndicatesCoverSheet(UIView *view) {
+    if (!LGWidgetViewIsVisibleInWindow(view)) return NO;
+    NSString *className = NSStringFromClass(view.class);
+    if ([className isEqualToString:@"CSProminentTimeView"]) return YES;
+    if ([className isEqualToString:@"SBFLockScreenDateView"]) return YES;
+    if ([className isEqualToString:@"CSMainPageView"]) return YES;
+    if ([className isEqualToString:@"SBDashBoardView"]) return YES;
+    if ([className isEqualToString:@"CSCoverSheetView"]) return YES;
+    if ([className isEqualToString:@"NCNotificationStructuredListView"]) return YES;
+    return NO;
+}
+
+static BOOL LGWidgetDetectCoverSheetVisible(void) {
+    CFTimeInterval now = CACurrentMediaTime();
+    if (now - sWidgetLastCoverSheetDetectionTime < 0.25) {
+        return sWidgetDetectedCoverSheetVisible;
+    }
+    sWidgetLastCoverSheetDetectionTime = now;
+
+    __block BOOL visible = NO;
+    UIApplication *app = UIApplication.sharedApplication;
+    void (^scanWindow)(UIWindow *) = ^(UIWindow *window) {
+        if (visible || !window || window.hidden || window.alpha <= 0.01f || window.layer.opacity <= 0.01f) return;
+        NSString *windowClass = NSStringFromClass(window.class);
+        if ([windowClass containsString:@"CoverSheet"] ||
+            [windowClass containsString:@"DashBoard"] ||
+            [windowClass containsString:@"LockScreen"]) {
+            visible = YES;
+            return;
+        }
+        LGTraverseViews(window, ^(UIView *view) {
+            if (visible) return;
+            if (LGWidgetViewIndicatesCoverSheet(view)) {
+                visible = YES;
+            }
+        });
+    };
+
+    if (@available(iOS 13.0, *)) {
+        for (UIScene *scene in app.connectedScenes) {
+            if (![scene isKindOfClass:[UIWindowScene class]]) continue;
+            for (UIWindow *window in ((UIWindowScene *)scene).windows) scanWindow(window);
+        }
+    } else {
+        for (UIWindow *window in LGApplicationWindows(app)) scanWindow(window);
+    }
+
+    if (sWidgetDetectedCoverSheetVisible != visible) {
+        sWidgetDetectedCoverSheetVisible = visible;
+    }
+    return sWidgetDetectedCoverSheetVisible;
+}
+
+static BOOL LGWidgetShouldSuspendForCoverSheet(void) {
+    return sWidgetCoverSheetVisible || LGWidgetDetectCoverSheetVisible();
 }
 
 static BOOL LGWidgetHostIsVisible(UIView *view) {
@@ -154,7 +221,7 @@ static NSUInteger LGWidgetVisibleHostCount(void) {
 }
 
 static void LGWidgetSyncDisplayLinkActivity(void) {
-    if (!LGWidgetEnabled()) {
+    if (!LGWidgetEnabled() || LGWidgetShouldSuspendForCoverSheet()) {
         sWidgetDisplayLinkState.activeCount = 0;
         LGDisplayLinkStateDidChangeActivity(&sWidgetDisplayLinkState);
         LGStopWidgetDisplayLink();
@@ -168,6 +235,17 @@ static void LGWidgetSyncDisplayLinkActivity(void) {
         LGStartWidgetDisplayLink();
     } else {
         LGStopWidgetDisplayLink();
+    }
+}
+
+static void LGWidgetSetCoverSheetVisible(BOOL visible) {
+    if (sWidgetCoverSheetVisible == visible) return;
+    sWidgetCoverSheetVisible = visible;
+    LGWidgetSyncDisplayLinkActivity();
+    if (!visible) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            LGWidgetsRefreshAllHosts();
+        });
     }
 }
 
@@ -254,7 +332,9 @@ static void LGStripWidgetTintFiltersFromLayerTree(CALayer *layer) {
             NSArray *cleanedBg = LGWidgetCleanedFilterArray(rawBackgroundFilters, &removedBg);
             if (removedBg) [layer setValue:cleanedBg forKey:@"backgroundFilters"];
         }
-    } @catch (__unused NSException *e) {}
+    } @catch (NSException *exception) {
+        LGDebugLog(@"widget tint filter strip failed %@ %@", exception.name, exception.reason);
+    }
 
     layer.compositingFilter = nil;
     for (CALayer *sub in layer.sublayers) {
@@ -417,6 +497,11 @@ static void LGPrepareWidgetGlassHostView(UIView *view) {
 
 static void LGInjectIntoWidgetGlassHostView(UIView *view) {
     CFTimeInterval profileStart = LGProfileBegin();
+    if (LGWidgetShouldSuspendForCoverSheet()) {
+        LGWidgetSyncDisplayLinkActivity();
+        LGProfileEnd(@"widgets.inject", profileStart);
+        return;
+    }
     if (!LGWidgetEnabled()) {
         removeWidgetOverlays(view);
         LGRestoreWidgetOriginalState(view);
@@ -530,6 +615,11 @@ static void LGWidgetsRefreshAllHosts(void) {
 
 static void LGWidgetsRefreshAttachedHosts(void) {
     CFTimeInterval profileStart = LGProfileBegin();
+    if (LGWidgetShouldSuspendForCoverSheet()) {
+        LGWidgetSyncDisplayLinkActivity();
+        LGProfileEnd(@"widgets.refresh_attached_hosts", profileStart);
+        return;
+    }
     for (UIView *view in LGWidgetHostRegistry().allObjects) {
         if (!view.window || !LGIsWidgetGlassHostView(view)) {
             LGDetachWidgetGlassHostView(view);
@@ -628,6 +718,10 @@ static void LGWidgetsPrefsChanged(CFNotificationCenterRef center,
 
     LGApplyWidgetStackMaterialVisibility(self_);
     if (!LGIsWidgetGlassHostView(self_)) return;
+    if (LGWidgetShouldSuspendForCoverSheet()) {
+        LGWidgetSyncDisplayLinkActivity();
+        return;
+    }
     LGInjectIntoWidgetGlassHostView(self_);
     if (![objc_getAssociatedObject(self_, kWidgetAttachedKey) boolValue]) {
         objc_setAssociatedObject(self_, kWidgetAttachedKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -646,6 +740,7 @@ static void LGWidgetsPrefsChanged(CFNotificationCenterRef center,
         return;
     }
     LGWidgetSyncDisplayLinkActivity();
+    if (LGWidgetShouldSuspendForCoverSheet()) return;
     if (LG_prefersLiveCapture(@"Widgets.RenderingMode")) {
         LGInjectIntoWidgetGlassHostView(self_);
         return;
@@ -690,6 +785,10 @@ static void LGWidgetsPrefsChanged(CFNotificationCenterRef center,
         LGDetachWidgetGlassHostView(host);
         return;
     }
+    if (LGWidgetShouldSuspendForCoverSheet()) {
+        LGWidgetSyncDisplayLinkActivity();
+        return;
+    }
 
     LGInjectIntoWidgetGlassHostView(host);
     if (![objc_getAssociatedObject(host, kWidgetAttachedKey) boolValue]) {
@@ -709,6 +808,7 @@ static void LGWidgetsPrefsChanged(CFNotificationCenterRef center,
         return;
     }
     LGWidgetSyncDisplayLinkActivity();
+    if (LGWidgetShouldSuspendForCoverSheet()) return;
     LiquidGlassView *glass = objc_getAssociatedObject(host, kWidgetGlassKey);
     if (!glass) {
         LGInjectIntoWidgetGlassHostView(host);
@@ -721,6 +821,44 @@ static void LGWidgetsPrefsChanged(CFNotificationCenterRef center,
     }
     ensureWidgetTintOverlay(host);
     [glass updateOrigin];
+}
+
+%end
+
+%hook SBCoverSheetViewController
+
+- (void)viewWillAppear:(BOOL)animated {
+    %orig;
+    LGWidgetSetCoverSheetVisible(YES);
+}
+
+- (void)viewDidAppear:(BOOL)animated {
+    %orig;
+    LGWidgetSetCoverSheetVisible(YES);
+}
+
+- (void)viewDidDisappear:(BOOL)animated {
+    %orig;
+    LGWidgetSetCoverSheetVisible(NO);
+}
+
+%end
+
+%hook SBDashBoardViewController
+
+- (void)viewWillAppear:(BOOL)animated {
+    %orig;
+    LGWidgetSetCoverSheetVisible(YES);
+}
+
+- (void)viewDidAppear:(BOOL)animated {
+    %orig;
+    LGWidgetSetCoverSheetVisible(YES);
+}
+
+- (void)viewDidDisappear:(BOOL)animated {
+    %orig;
+    LGWidgetSetCoverSheetVisible(NO);
 }
 
 %end

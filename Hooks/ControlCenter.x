@@ -219,7 +219,8 @@ static void LGControlCenterClampExistingFilterRadiusIfNeeded(id filter, CGFloat 
             if (cappedValue != currentValue) {
                 [filter setValue:cappedValue forKey:key];
             }
-        } @catch (__unused NSException *exception) {
+        } @catch (NSException *exception) {
+            LGDebugLog(@"control center blur filter clamp failed key=%@ %@ %@", key, exception.name, exception.reason);
         }
     }
 }
@@ -242,7 +243,8 @@ static void LGControlCenterMarkBlurCapOnLayer(CALayer *layer, CGFloat radius) {
         if ([backgroundFilters isKindOfClass:[NSArray class]]) {
             LGControlCenterMarkBlurFilterArray(backgroundFilters, radius);
         }
-    } @catch (__unused NSException *exception) {
+    } @catch (NSException *exception) {
+        LGDebugLog(@"control center background filter read failed %@ %@", exception.name, exception.reason);
     }
     for (CALayer *sublayer in layer.sublayers) {
         LGControlCenterMarkBlurCapOnLayer(sublayer, radius);
@@ -254,7 +256,8 @@ static void LGControlCenterClampBlurAnimation(CAAnimation *animation, CGFloat ra
     NSString *keyPath = nil;
     @try {
         keyPath = [animation valueForKey:@"keyPath"];
-    } @catch (__unused NSException *exception) {
+    } @catch (NSException *exception) {
+        LGDebugLog(@"control center animation keyPath read failed %@ %@", exception.name, exception.reason);
     }
     if (![keyPath isKindOfClass:[NSString class]]) return;
     NSString *lowerKeyPath = keyPath.lowercaseString;
@@ -349,7 +352,8 @@ static BOOL LGControlCenterModuleIsExpanded(UIView *host) {
     BOOL expanded = NO;
     @try {
         expanded = [[host valueForKey:@"_expanded"] boolValue];
-    } @catch (__unused NSException *exception) {
+    } @catch (NSException *exception) {
+        LGDebugLog(@"control center expanded state read failed %@ %@", exception.name, exception.reason);
         expanded = NO;
     }
     return expanded;

@@ -33,6 +33,7 @@ extern int proc_name(int pid, void *buffer, uint32_t buffersize);
 
 static BOOL LG_isAtLeastiOS16(void);
 static CFStringRef const LGInvalidateSnapshotCachesNotification = CFSTR("love.litten.liquidass/InvalidateSnapshotCaches");
+static const size_t kLGBlackImageSampleGrid = 5;
 void LGRefreshLockSnapshotAfterDelay(NSTimeInterval delay);
 
 typedef NS_OPTIONS(NSUInteger, SBSRelaunchActionOptions) {
@@ -951,14 +952,18 @@ BOOL LG_imageLooksBlack(UIImage *img) {
     if (!img) return YES;
     CGImageRef cg = img.CGImage;
     if (!cg) return YES;
-    #define kSampleGrid 5
-    unsigned char px[kSampleGrid * kSampleGrid * 4] = {0};
-    CGContextRef ctx = CGBitmapContextCreate(px, kSampleGrid, kSampleGrid, 8, kSampleGrid * 4, LGSharedRGBColorSpace(),
+    unsigned char px[kLGBlackImageSampleGrid * kLGBlackImageSampleGrid * 4] = {0};
+    CGContextRef ctx = CGBitmapContextCreate(px,
+                                             kLGBlackImageSampleGrid,
+                                             kLGBlackImageSampleGrid,
+                                             8,
+                                             kLGBlackImageSampleGrid * 4,
+                                             LGSharedRGBColorSpace(),
         kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big);
     if (!ctx) return YES;
-    CGContextDrawImage(ctx, CGRectMake(0, 0, kSampleGrid, kSampleGrid), cg);
+    CGContextDrawImage(ctx, CGRectMake(0, 0, kLGBlackImageSampleGrid, kLGBlackImageSampleGrid), cg);
     CGContextRelease(ctx);
-    NSUInteger sampleCount = kSampleGrid * kSampleGrid;
+    NSUInteger sampleCount = kLGBlackImageSampleGrid * kLGBlackImageSampleGrid;
     uint8_t brightestChannel = 0;
     for (NSUInteger i = 0; i < sampleCount; i++) {
         uint8_t r = px[i * 4];
@@ -1706,16 +1711,17 @@ static void LG_killProcessNamed(const char *targetName) {
 
     pid_t *pids = (pid_t *)pidData.bytes;
     int pidCount = bytesReturned / (int)sizeof(pid_t);
+    char processName[PROC_PIDPATHINFO_MAXSIZE];
     for (int i = 0; i < pidCount; i++) {
         pid_t pid = pids[i];
         if (pid <= 0 || pid == getpid()) continue;
 
-        char processName[PROC_PIDPATHINFO_MAXSIZE] = {0};
+        memset(processName, 0, sizeof(processName));
         int nameLength = proc_name(pid, processName, sizeof(processName));
         if (nameLength <= 0 || strcmp(processName, targetName) != 0) continue;
 
-        if (kill(pid, SIGKILL) != 0) {
-            LGLog(@"failed to kill %s pid %d: %d", targetName, pid, errno);
+        if (kill(pid, SIGTERM) != 0) {
+            LGLog(@"failed to terminate %s pid %d: %d", targetName, pid, errno);
         }
     }
 }

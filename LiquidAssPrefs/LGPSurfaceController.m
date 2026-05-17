@@ -182,6 +182,17 @@ static BOOL LGItemVisibleForCurrentPreferences(NSDictionary *item) {
         _screenSubtitle = [LGLocalized(@"prefs.misc.experimental.subtitle") copy];
         _accentColor = [UIColor systemOrangeColor];
         _items = [LGExperimentalItems() copy];
+    } else if ([_screenIdentifier isEqualToString:@"CustomViews"]) {
+        _screenTitle = [LGLocalized(@"prefs.misc.custom_views.title") copy];
+        _screenSubtitle = [LGLocalized(@"prefs.misc.custom_views.subtitle") copy];
+        _accentColor = [UIColor systemPurpleColor];
+        _items = [LGCustomViewInjectionItems() copy];
+    } else if ([_screenIdentifier hasPrefix:@"CustomViewRule:"]) {
+        NSString *ruleID = [_screenIdentifier substringFromIndex:@"CustomViewRule:".length];
+        _screenTitle = [LGLocalized(@"prefs.custom_views.rule_details.title") copy];
+        _screenSubtitle = [LGLocalized(@"prefs.custom_views.rule.subtitle") copy];
+        _accentColor = [UIColor systemPurpleColor];
+        _items = [LGCustomViewRuleItems(ruleID) copy];
     } else if ([_screenIdentifier isEqualToString:@"LiveCapture"]) {
         _screenTitle = [LGLocalized(@"prefs.misc.live_capture.title") copy];
         _screenSubtitle = [LGLocalized(@"prefs.misc.live_capture.subtitle") copy];
@@ -240,6 +251,10 @@ static BOOL LGItemVisibleForCurrentPreferences(NSDictionary *item) {
 - (void)viewWillAppear:(BOOL)animated {
     [super viewWillAppear:animated];
     [self applyNavigationBarStyle];
+    if ([_screenIdentifier isEqualToString:@"CustomViews"] || [_screenIdentifier hasPrefix:@"CustomViewRule:"]) {
+        [self reloadLocalizedContent];
+        [self reloadVisibleSettings];
+    }
 }
 
 - (void)viewDidAppear:(BOOL)animated {
@@ -295,11 +310,21 @@ static BOOL LGItemVisibleForCurrentPreferences(NSDictionary *item) {
 }
 
 - (NSArray<NSString *> *)currentPreferenceKeys {
+    if ([_screenIdentifier isEqualToString:@"CustomViews"]) {
+        return LGAllCustomViewPreferenceKeys();
+    }
     NSMutableOrderedSet<NSString *> *keys = [NSMutableOrderedSet orderedSet];
     for (NSDictionary *item in _items) {
         NSString *key = item[@"key"];
-        if (!key.length) continue;
-        [keys addObject:key];
+        if (key.length) [keys addObject:key];
+        NSArray *itemKeys = item[@"keys"];
+        if ([itemKeys isKindOfClass:NSArray.class]) {
+            for (id itemKey in itemKeys) {
+                if ([itemKey isKindOfClass:NSString.class] && [itemKey length]) {
+                    [keys addObject:itemKey];
+                }
+            }
+        }
     }
     return keys.array;
 }
@@ -359,6 +384,59 @@ static BOOL LGItemVisibleForCurrentPreferences(NSDictionary *item) {
                                                                         identifier:@"LiveCapture"
                                                                              items:LGLiveCaptureItems()];
     [self.navigationController pushViewController:controller animated:YES];
+}
+
+- (void)openCustomViewInjection {
+    LGPSurfaceController *controller = [[LGPSurfaceController alloc] initWithTitle:LGLocalized(@"prefs.misc.custom_views.title")
+                                                                          subtitle:LGLocalized(@"prefs.misc.custom_views.subtitle")
+                                                                         tintColor:[UIColor systemPurpleColor]
+                                                                        identifier:@"CustomViews"
+                                                                             items:LGCustomViewInjectionItems()];
+    [self.navigationController pushViewController:controller animated:YES];
+}
+
+- (void)openCustomViewRule:(UIButton *)sender {
+    NSDictionary *item = objc_getAssociatedObject(sender, kLGPanelItemKey);
+    NSString *ruleID = item[@"rule_id"];
+    if (![ruleID isKindOfClass:NSString.class] || !ruleID.length) return;
+    LGPSurfaceController *controller = [[LGPSurfaceController alloc] initWithTitle:LGLocalized(@"prefs.custom_views.rule_details.title")
+                                                                          subtitle:LGLocalized(@"prefs.custom_views.rule.subtitle")
+                                                                         tintColor:[UIColor systemPurpleColor]
+                                                                        identifier:[@"CustomViewRule:" stringByAppendingString:ruleID]
+                                                                             items:LGCustomViewRuleItems(ruleID)];
+    [self.navigationController pushViewController:controller animated:YES];
+}
+
+- (void)addCustomViewRule:(UIButton *)sender {
+    (void)sender;
+    NSString *ruleID = LGCreateCustomViewRule();
+    [self reloadLocalizedContent];
+    [self reloadVisibleSettings];
+    if (!ruleID.length) return;
+    LGPSurfaceController *controller = [[LGPSurfaceController alloc] initWithTitle:LGLocalized(@"prefs.custom_views.rule_details.title")
+                                                                          subtitle:LGLocalized(@"prefs.custom_views.rule.subtitle")
+                                                                         tintColor:[UIColor systemPurpleColor]
+                                                                        identifier:[@"CustomViewRule:" stringByAppendingString:ruleID]
+                                                                             items:LGCustomViewRuleItems(ruleID)];
+    [self.navigationController pushViewController:controller animated:YES];
+}
+
+- (void)deleteCustomViewRule {
+    if (![_screenIdentifier hasPrefix:@"CustomViewRule:"]) return;
+    NSString *ruleID = [_screenIdentifier substringFromIndex:@"CustomViewRule:".length];
+    __weak typeof(self) weakSelf = self;
+    LGPresentConfirmationSheet(self,
+                               LGLocalized(@"prefs.custom_views.delete_rule.title"),
+                               LGLocalized(@"prefs.custom_views.delete_rule.confirm"),
+                               LGLocalized(@"prefs.button.cancel"),
+                               LGLocalized(@"prefs.custom_views.delete_rule.title"),
+                               YES,
+                               ^{
+        __strong typeof(weakSelf) self = weakSelf;
+        if (!self) return;
+        LGDeleteCustomViewRule(ruleID);
+        [self.navigationController popViewControllerAnimated:YES];
+    });
 }
 
 - (void)invalidateSnapshotCaches {
@@ -1042,12 +1120,7 @@ static BOOL LGItemVisibleForCurrentPreferences(NSDictionary *item) {
     NSString *address = objc_getAssociatedObject(sender, kLGDonationAddressKey);
     if (!address.length) return;
     UIPasteboard.generalPasteboard.string = address;
-
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Copied"
-                                                                   message:@"Wallet address copied to clipboard."
-                                                            preferredStyle:UIAlertControllerStyleAlert];
-    [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
-    [self presentViewController:alert animated:YES completion:nil];
+    LGPresentInfoSheet(self, @"Copied", @"Wallet address copied to clipboard.");
 }
 
 - (UIView *)donationRowWithName:(NSString *)name
@@ -1418,22 +1491,7 @@ static BOOL LGItemVisibleForCurrentPreferences(NSDictionary *item) {
 - (void)handleSliderInfoPressed:(UIButton *)sender {
     NSString *controlTitle = objc_getAssociatedObject(sender, kLGControlTitleKey);
     NSString *subtitle = objc_getAssociatedObject(sender, kLGControlSubtitleKey);
-    NSNumber *minNumber = objc_getAssociatedObject(sender, kLGMinValueKey);
-    NSNumber *maxNumber = objc_getAssociatedObject(sender, kLGMaxValueKey);
-    NSNumber *decimalsNumber = objc_getAssociatedObject(sender, kLGDecimalsKey);
-
-    NSInteger decimals = decimalsNumber.integerValue;
-    NSString *rangeText = (minNumber && maxNumber)
-        ? [NSString stringWithFormat:LGLocalized(@"prefs.range_format"),
-           LGFormatSliderValue(minNumber.doubleValue, decimals),
-           LGFormatSliderValue(maxNumber.doubleValue, decimals)]
-        : nil;
-
-    NSMutableArray<NSString *> *parts = [NSMutableArray array];
-    if (subtitle.length) [parts addObject:subtitle];
-    if (rangeText.length) [parts addObject:rangeText];
-    NSString *message = parts.count ? [parts componentsJoinedByString:@"\n\n"] : nil;
-    LGPresentInfoSheet(self, (controlTitle.length ? controlTitle : LGLocalized(@"prefs.info.title")), message);
+    LGPresentInfoSheet(self, (controlTitle.length ? controlTitle : LGLocalized(@"prefs.info.title")), subtitle);
 }
 
 - (void)jumpToSectionNamed:(NSString *)title {
@@ -1965,35 +2023,122 @@ static BOOL LGItemVisibleForCurrentPreferences(NSDictionary *item) {
         __strong typeof(weakSelf) strongSelf = weakSelf;
         if (!strongSelf) return;
         NSString *current = weakValueLabel.text.length ? weakValueLabel.text : fallback;
-        UIAlertController *alert = [UIAlertController alertControllerWithTitle:item[@"title"]
-                                                                       message:item[@"subtitle"]
-                                                                preferredStyle:UIAlertControllerStyleAlert];
-        [alert addTextFieldWithConfigurationHandler:^(UITextField * _Nonnull textField) {
-            textField.text = current;
-            textField.placeholder = item[@"placeholder"];
-            textField.clearButtonMode = UITextFieldViewModeWhileEditing;
-            textField.autocorrectionType = UITextAutocorrectionTypeNo;
-            textField.autocapitalizationType = UITextAutocapitalizationTypeNone;
-            textField.smartDashesType = UITextSmartDashesTypeNo;
-            textField.smartQuotesType = UITextSmartQuotesTypeNo;
-            textField.smartInsertDeleteType = UITextSmartInsertDeleteTypeNo;
-            textField.keyboardType = UIKeyboardTypeASCIICapable;
-        }];
-        [alert addAction:[UIAlertAction actionWithTitle:LGLocalized(@"prefs.button.cancel")
-                                                  style:UIAlertActionStyleCancel
-                                                handler:nil]];
-        [alert addAction:[UIAlertAction actionWithTitle:LGLocalized(@"prefs.button.apply")
-                                                  style:UIAlertActionStyleDefault
-                                                handler:^(__unused UIAlertAction *alertAction) {
-            NSString *text = alert.textFields.firstObject.text ?: @"";
+        LGPresentTextInputSheet(strongSelf,
+                                item[@"title"],
+                                item[@"subtitle"],
+                                current,
+                                item[@"placeholder"],
+                                UIKeyboardTypeASCIICapable,
+                                YES,
+                                ^(NSString *inputText) {
+            NSString *text = inputText ?: @"";
             text = [text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
             if (!text.length) text = fallback ?: @"";
             weakValueLabel.text = text;
             LGWritePreferenceObject(preferenceKey, text);
-        }]];
-        [strongSelf presentViewController:alert animated:YES completion:nil];
+        });
     }] forControlEvents:UIControlEventTouchUpInside];
     return button;
+}
+
+- (UITextField *)customClassFilterTextFieldForField:(NSDictionary *)field {
+    NSString *preferenceKey = field[@"key"];
+    NSString *stored = LGReadPreferenceObject(preferenceKey, @"");
+    if (![stored isKindOfClass:NSString.class]) stored = @"";
+
+    UITextField *textField = [[UITextField alloc] initWithFrame:CGRectZero];
+    textField.translatesAutoresizingMaskIntoConstraints = NO;
+    textField.text = stored;
+    textField.placeholder = field[@"placeholder"];
+    textField.textColor = UIColor.labelColor;
+    textField.tintColor = _accentColor;
+    textField.font = [UIFont monospacedSystemFontOfSize:14.0 weight:UIFontWeightMedium];
+    textField.textAlignment = NSTextAlignmentRight;
+    textField.clearButtonMode = UITextFieldViewModeWhileEditing;
+    textField.autocorrectionType = UITextAutocorrectionTypeNo;
+    textField.autocapitalizationType = UITextAutocapitalizationTypeNone;
+    textField.smartDashesType = UITextSmartDashesTypeNo;
+    textField.smartQuotesType = UITextSmartQuotesTypeNo;
+    textField.smartInsertDeleteType = UITextSmartInsertDeleteTypeNo;
+    textField.keyboardType = UIKeyboardTypeASCIICapable;
+    textField.returnKeyType = UIReturnKeyDone;
+    objc_setAssociatedObject(textField, kLGPreferenceKeyKey, preferenceKey, OBJC_ASSOCIATION_COPY_NONATOMIC);
+    objc_setAssociatedObject(textField, kLGDefaultValueKey, @"", OBJC_ASSOCIATION_COPY_NONATOMIC);
+    [textField addAction:[UIAction actionWithHandler:^(__kindof UIAction * _Nonnull action) {
+        UITextField *sender = (UITextField *)action.sender;
+        NSString *key = objc_getAssociatedObject(sender, kLGPreferenceKeyKey);
+        NSString *text = [sender.text ?: @"" stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+        if (text.length) {
+            LGWritePreferenceObject(key, text);
+        } else {
+            LGRemovePreference(key);
+        }
+    }] forControlEvents:UIControlEventEditingDidEnd | UIControlEventEditingDidEndOnExit];
+    return textField;
+}
+
+- (UIView *)customClassFiltersBodyForItem:(NSDictionary *)item titleLabel:(UILabel *)titleLabel {
+    UIView *body = [[UIView alloc] initWithFrame:CGRectZero];
+    UIStackView *stack = [[UIStackView alloc] initWithFrame:CGRectZero];
+    stack.axis = UILayoutConstraintAxisVertical;
+    stack.spacing = 10.0;
+    stack.translatesAutoresizingMaskIntoConstraints = NO;
+    [body addSubview:stack];
+
+    [stack addArrangedSubview:titleLabel];
+    NSString *subtitle = item[@"subtitle"];
+    if (subtitle.length) {
+        [stack addArrangedSubview:[self controlSubtitleLabelWithText:subtitle]];
+    }
+
+    NSArray<NSDictionary *> *fields = item[@"fields"];
+    UIStackView *fieldStack = [[UIStackView alloc] initWithFrame:CGRectZero];
+    fieldStack.axis = UILayoutConstraintAxisVertical;
+    fieldStack.spacing = 7.0;
+    fieldStack.translatesAutoresizingMaskIntoConstraints = NO;
+    [stack addArrangedSubview:fieldStack];
+
+    for (NSDictionary *field in fields) {
+        UIView *row = [[UIView alloc] initWithFrame:CGRectZero];
+        row.translatesAutoresizingMaskIntoConstraints = NO;
+        row.backgroundColor = [UIColor secondarySystemGroupedBackgroundColor];
+        row.layer.cornerRadius = 12.0;
+        row.layer.cornerCurve = kCACornerCurveContinuous;
+        row.layer.masksToBounds = YES;
+
+        UILabel *label = [[UILabel alloc] initWithFrame:CGRectZero];
+        label.translatesAutoresizingMaskIntoConstraints = NO;
+        label.text = field[@"title"];
+        label.font = [UIFont systemFontOfSize:14.0 weight:UIFontWeightSemibold];
+        label.textColor = UIColor.labelColor;
+        [row addSubview:label];
+
+        UITextField *textField = [self customClassFilterTextFieldForField:field];
+        [row addSubview:textField];
+
+        [NSLayoutConstraint activateConstraints:@[
+            [row.heightAnchor constraintGreaterThanOrEqualToConstant:42.0],
+            [label.leadingAnchor constraintEqualToAnchor:row.leadingAnchor constant:12.0],
+            [label.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
+            [label.widthAnchor constraintEqualToConstant:126.0],
+            [textField.leadingAnchor constraintEqualToAnchor:label.trailingAnchor constant:10.0],
+            [textField.trailingAnchor constraintEqualToAnchor:row.trailingAnchor constant:-12.0],
+            [textField.topAnchor constraintEqualToAnchor:row.topAnchor constant:6.0],
+            [textField.bottomAnchor constraintEqualToAnchor:row.bottomAnchor constant:-6.0],
+        ]];
+        [fieldStack addArrangedSubview:row];
+    }
+
+    UILabel *hint = [self controlSubtitleLabelWithText:LGLocalized(@"prefs.custom_views.class_filters.hint")];
+    [stack addArrangedSubview:hint];
+
+    [NSLayoutConstraint activateConstraints:@[
+        [stack.topAnchor constraintEqualToAnchor:body.topAnchor constant:13.0],
+        [stack.leadingAnchor constraintEqualToAnchor:body.leadingAnchor constant:14.0],
+        [stack.trailingAnchor constraintEqualToAnchor:body.trailingAnchor constant:-14.0],
+        [stack.bottomAnchor constraintEqualToAnchor:body.bottomAnchor constant:-13.0],
+    ]];
+    return body;
 }
 
 - (UIView *)navControlBodyForItem:(NSDictionary *)item titleLabel:(UILabel *)titleLabel {
@@ -2012,6 +2157,7 @@ static BOOL LGItemVisibleForCurrentPreferences(NSDictionary *item) {
             [button addTarget:self action:action forControlEvents:UIControlEventTouchUpInside];
         }
     }
+    objc_setAssociatedObject(button, kLGPanelItemKey, item, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
     UIView *body = [[UIView alloc] initWithFrame:CGRectZero];
     body.userInteractionEnabled = NO;
@@ -2063,6 +2209,9 @@ static BOOL LGItemVisibleForCurrentPreferences(NSDictionary *item) {
     }
     if ([item[@"type"] isEqualToString:@"string"]) {
         return [self stringControlBodyForItem:item titleLabel:titleLabel];
+    }
+    if ([item[@"type"] isEqualToString:@"custom_class_filters"]) {
+        return [self customClassFiltersBodyForItem:item titleLabel:titleLabel];
     }
     return [self sliderControlBodyForItem:item titleLabel:titleLabel];
 }

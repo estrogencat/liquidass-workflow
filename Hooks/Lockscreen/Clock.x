@@ -18,12 +18,14 @@ static void *kLGClockAttachedKey = &kLGClockAttachedKey;
 static void *kLGClockLegacyNotificationOriginalFrameKey = &kLGClockLegacyNotificationOriginalFrameKey;
 static void *kLGClockLegacyNotificationPendingKey = &kLGClockLegacyNotificationPendingKey;
 static void *kLGClockLegacyNotificationApplyingKey = &kLGClockLegacyNotificationApplyingKey;
+static void *kLGClockLegacyNotificationLastRelayoutKey = &kLGClockLegacyNotificationLastRelayoutKey;
 static void *kLGClockLegacyRevealHintPendingKey = &kLGClockLegacyRevealHintPendingKey;
 static void *kLGClockApplyingDateTextKey = &kLGClockApplyingDateTextKey;
 static void *kLGClockOriginalDateTextKey = &kLGClockOriginalDateTextKey;
 static void *kLGClockLastCustomDateTextKey = &kLGClockLastCustomDateTextKey;
 static void *kLGClockLastBailReasonKey = &kLGClockLastBailReasonKey;
 static void *kLGClockDeferredApplyPendingKey = &kLGClockDeferredApplyPendingKey;
+static void *kLGClockLastDeferredApplyTimeKey = &kLGClockLastDeferredApplyTimeKey;
 static LGDisplayLinkState sClockDisplayLinkState = {0};
 static NSHashTable<UIView *> *sClockHosts = nil;
 static NSHashTable<UIView *> *sClockNotificationObstacleViews = nil;
@@ -39,6 +41,7 @@ static void LGClockBoostDisplayFPSForDuration(CFTimeInterval duration);
 static void LGClockSyncDisplayLinkActivity(void);
 static void LGClockSetCoverSheetVisible(BOOL visible);
 static void LGRefreshRegisteredClockHosts(void);
+static void LGScheduleClockApply(UIView *host, BOOL includeRecoveryRetry, CFTimeInterval minimumInterval);
 static void LGScheduleClockRecoveryRefresh(void);
 static void LGClockCleanupRegisteredHosts(void);
 static void LGClockRegisterNotificationObstacleView(UIView *view);
@@ -254,6 +257,10 @@ static NSString *LGClockLegacyFontStyle(void) {
 
 static BOOL LGClockLegacyUsesVariableFont(void) {
     return [LGClockLegacyFontStyle() isEqualToString:LGClockLegacyFontStyleIOS26];
+}
+
+static BOOL LGClockLegacyNotificationShiftEnabled(void) {
+    return LGClockLegacyUsesVariableFont();
 }
 
 static CGFloat LGClockLegacyNotificationClockGap(void) {
@@ -702,21 +709,11 @@ static UIView *LGClockFindModernClockHostInWindow(UIWindow *window) {
     return match;
 }
 
-static CGFloat LGClockLegacyNestedNotificationExpansionHeight(UIView *notificationListView) {
-    __block CGFloat maxHeight = 0.0;
-    for (UIView *subview in notificationListView.subviews) {
-        if (![NSStringFromClass(subview.class) isEqualToString:@"NCNotificationListView"]) continue;
-        if (subview.hidden || subview.alpha <= 0.01) continue;
-        maxHeight = MAX(maxHeight, CGRectGetHeight(subview.bounds));
-        maxHeight = MAX(maxHeight, CGRectGetHeight(subview.frame));
-    }
-    return maxHeight;
-}
-
 static CGRect LGAdjustedLegacyNotificationListFrame(UIView *notificationListView, CGRect proposedFrame) {
     if (!notificationListView || !notificationListView.window) return proposedFrame;
     if (LGIsAtLeastiOS16()) return proposedFrame;
     if (!LGClockEnabled()) return proposedFrame;
+    if (!LGClockLegacyNotificationShiftEnabled()) return proposedFrame;
     NSValue *originalFrameValue = objc_getAssociatedObject(notificationListView, kLGClockLegacyNotificationOriginalFrameKey);
     if (!originalFrameValue) {
         originalFrameValue = [NSValue valueWithCGRect:proposedFrame];
@@ -743,7 +740,6 @@ static CGRect LGAdjustedLegacyNotificationListFrame(UIView *notificationListView
     CGRect currentFrame = proposedFrame;
     CGFloat desiredMinY = CGRectGetMinY(originalFrameValue.CGRectValue);
     CGRect anchorRectInContainer = CGRectZero;
-    CGFloat nestedExpansionHeight = LGClockLegacyNestedNotificationExpansionHeight(notificationListView);
     UIView *clockHost = LGClockFindLegacyClockHostInWindow(notificationListView.window);
     if (!LGClockShouldMutateStockLayoutForView(clockHost ?: notificationListView)) {
         return proposedFrame;
@@ -751,11 +747,6 @@ static CGRect LGAdjustedLegacyNotificationListFrame(UIView *notificationListView
     if (clockHost) {
         anchorRectInContainer = [containerView convertRect:clockHost.bounds fromView:clockHost];
         desiredMinY = CGRectGetMaxY(anchorRectInContainer) + LGClockLegacyNotificationClockGap();
-    }
-
-    BOOL expanded = nestedExpansionHeight > MAX(CGRectGetHeight(currentFrame) + 80.0, 220.0);
-    if (expanded) {
-        desiredMinY = CGRectGetMinY(originalFrameValue.CGRectValue);
     }
 
     CGFloat delta = desiredMinY - CGRectGetMinY(currentFrame);
@@ -774,7 +765,16 @@ static void LGRelayoutLegacyNotificationListView(UIView *notificationListView) {
     if (!notificationListView || !notificationListView.window) return;
     if (LGIsAtLeastiOS16()) return;
     if (!LGClockEnabled()) return;
+    if (!LGClockLegacyNotificationShiftEnabled()) return;
     if ([objc_getAssociatedObject(notificationListView, kLGClockLegacyNotificationApplyingKey) boolValue]) return;
+
+    CFTimeInterval now = CACurrentMediaTime();
+    NSNumber *lastRelayoutTime = objc_getAssociatedObject(notificationListView, kLGClockLegacyNotificationLastRelayoutKey);
+    if (lastRelayoutTime.doubleValue > 0.0 && now - lastRelayoutTime.doubleValue < (1.0 / 15.0)) return;
+    objc_setAssociatedObject(notificationListView,
+                             kLGClockLegacyNotificationLastRelayoutKey,
+                             @(now),
+                             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
     CGRect adjustedFrame = LGAdjustedLegacyNotificationListFrame(notificationListView, notificationListView.frame);
     if (CGRectEqualToRect(adjustedFrame, notificationListView.frame)) return;
@@ -835,13 +835,13 @@ static void LGStartClockDisplayLink(void) {
                                              ^{
         for (UIView *host in LGClockHostRegistry().allObjects) {
             if (!host.window || !LGClockViewIsVisiblyPresent(host)) {
-                LGApplyClockReplacement(host);
+                LGClockSyncDisplayLinkActivity();
                 continue;
             }
             if (!LGIsClockHost(host)) continue;
             UIView *overlay = objc_getAssociatedObject(host, kLGClockOverlayKey);
             if (!overlay || overlay.superview == nil) {
-                LGApplyClockReplacement(host);
+                LGScheduleClockApply(host, YES, 1.0 / 30.0);
                 continue;
             }
             [(id)overlay refreshForDisplayLink];
@@ -2332,7 +2332,8 @@ static UIView *LGClockOverlayContainerForHost(UIView *host) {
     @try {
         [scrollView removeObserver:self forKeyPath:@"contentOffset" context:kLGClockScrollKVOContext];
         [scrollView removeObserver:self forKeyPath:@"bounds" context:kLGClockScrollKVOContext];
-    } @catch (__unused NSException *exception) {
+    } @catch (NSException *exception) {
+        LGDebugLog(@"clock scroll observer cleanup failed %@ %@", exception.name, exception.reason);
     }
 }
 
@@ -2412,19 +2413,6 @@ static void LGApplyClockReplacement(UIView *host) {
     BOOL enabled = LGClockEnabled();
     BOOL overlayEligible = LGClockHostCanReceiveOverlay(host);
     BOOL blocking = LGClockHasBlockingPresentation(host);
-    if (LGIsModernClockHost(host)) {
-        LGDebugLog(@"clock apply-entry kind=modern host=%@ window=%d frame=%@ enabled=%d eligible=%d detail=%@ source=%@ visible=%lu blocking=%d overlay=%@",
-                   NSStringFromClass(host.class),
-                   host.window != nil,
-                   NSStringFromCGRect(host.frame),
-                   enabled,
-                   overlayEligible,
-                   overlayEligible ? @"" : LGClockHostIneligibilityReason(host),
-                   sourceLabel ? NSStringFromClass(sourceLabel.class) : @"nil",
-                   (unsigned long)visibleSourceViews.count,
-                   blocking,
-                   overlay ? NSStringFromClass(overlay.class) : @"nil");
-    }
     if (!enabled || !overlayEligible || !sourceLabel || blocking) {
         NSString *reason = !enabled ? @"disabled"
             : !overlayEligible ? @"not-eligible"
@@ -2490,21 +2478,9 @@ static void LGApplyClockReplacement(UIView *host) {
         overlay = [[LGClockGlassView alloc] initWithFrame:sourceLabel.frame];
         objc_setAssociatedObject(host, kLGClockOverlayKey, overlay, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         [overlayContainer addSubview:overlay];
-        LGDebugLog(@"clock inject kind=%@ host=%@ container=%@ frame=%@ source=%@",
-                   LGClockHostKind(host),
-                   NSStringFromClass(host.class),
-                   NSStringFromClass(overlayContainer.class),
-                   NSStringFromCGRect(host.frame),
-                   NSStringFromCGRect(sourceLabel.frame));
     } else if (overlay.superview != overlayContainer) {
         [overlay removeFromSuperview];
         [overlayContainer addSubview:overlay];
-        LGDebugLog(@"clock inject kind=%@ host=%@ container=%@ frame=%@ source=%@",
-                   LGClockHostKind(host),
-                   NSStringFromClass(host.class),
-                   NSStringFromClass(overlayContainer.class),
-                   NSStringFromCGRect(host.frame),
-                   NSStringFromCGRect(sourceLabel.frame));
     }
 
     overlay.clockHost = host;
@@ -2514,55 +2490,57 @@ static void LGApplyClockReplacement(UIView *host) {
     LGClockSeedObstacleRegistriesFromWindow(host.window);
     [overlay syncFromSourceLabel:sourceLabel];
     [overlay.superview bringSubviewToFront:overlay];
-    LGDebugLog(@"clock ready kind=%@ host=%@ overlay=%@ container=%@ frame=%@ alpha=%.2f hidden=%d",
-               LGClockHostKind(host),
-               NSStringFromClass(host.class),
-               NSStringFromClass(overlay.class),
-               overlay.superview ? NSStringFromClass(overlay.superview.class) : @"nil",
-               NSStringFromCGRect(overlay.frame),
-               overlay.alpha,
-               overlay.hidden);
     LGProfileEnd(@"clock.apply", profileStart);
 }
 
-static void LGScheduleClockApply(UIView *host) {
+static void LGClockRunDeferredApply(UIView *host) {
+    objc_setAssociatedObject(host,
+                             kLGClockLastDeferredApplyTimeKey,
+                             @(CACurrentMediaTime()),
+                             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if (host.window) LGApplyClockReplacement(host);
+}
+
+static void LGScheduleClockApply(UIView *host, BOOL includeRecoveryRetry, CFTimeInterval minimumInterval) {
     if (!host || !LGIsClockHost(host)) return;
     if ([objc_getAssociatedObject(host, kLGClockDeferredApplyPendingKey) boolValue]) {
-        if (LGIsModernClockHost(host)) {
-            LGDebugLog(@"clock schedule-skip kind=modern host=%@ window=%d frame=%@",
-                       NSStringFromClass(host.class),
-                       host.window != nil,
-                       NSStringFromCGRect(host.frame));
-        }
         return;
     }
-    if (LGIsModernClockHost(host)) {
-        LGDebugLog(@"clock schedule kind=modern host=%@ window=%d frame=%@",
-                   NSStringFromClass(host.class),
-                   host.window != nil,
-                   NSStringFromCGRect(host.frame));
+    CFTimeInterval now = CACurrentMediaTime();
+    NSNumber *lastApplyTime = objc_getAssociatedObject(host, kLGClockLastDeferredApplyTimeKey);
+    CFTimeInterval delay = 0.0;
+    if (minimumInterval > 0.0 && lastApplyTime.doubleValue > 0.0) {
+        delay = MAX(0.0, minimumInterval - (now - lastApplyTime.doubleValue));
     }
     objc_setAssociatedObject(host, kLGClockDeferredApplyPendingKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    dispatch_async(dispatch_get_main_queue(), ^{
-        objc_setAssociatedObject(host, kLGClockDeferredApplyPendingKey, nil, OBJC_ASSOCIATION_ASSIGN);
-        if (LGIsModernClockHost(host)) {
-            LGDebugLog(@"clock schedule-fire kind=modern delay=0 host=%@ window=%d frame=%@",
-                       NSStringFromClass(host.class),
-                       host.window != nil,
-                       NSStringFromCGRect(host.frame));
+    dispatch_block_t applyBlock = ^{
+        LGClockRunDeferredApply(host);
+        if (!includeRecoveryRetry) {
+            objc_setAssociatedObject(host, kLGClockDeferredApplyPendingKey, nil, OBJC_ASSOCIATION_ASSIGN);
+            return;
         }
-        if (host.window) LGApplyClockReplacement(host);
-    });
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)),
-                   dispatch_get_main_queue(), ^{
-        if (LGIsModernClockHost(host)) {
-            LGDebugLog(@"clock schedule-fire kind=modern delay=0.05 host=%@ window=%d frame=%@",
-                       NSStringFromClass(host.class),
-                       host.window != nil,
-                       NSStringFromCGRect(host.frame));
-        }
-        if (host.window) LGApplyClockReplacement(host);
-    });
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            LGClockRunDeferredApply(host);
+            objc_setAssociatedObject(host, kLGClockDeferredApplyPendingKey, nil, OBJC_ASSOCIATION_ASSIGN);
+        });
+    };
+    if (delay <= 0.0) {
+        dispatch_async(dispatch_get_main_queue(), applyBlock);
+    } else {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(),
+                       applyBlock);
+    }
+}
+
+static void LGRequestClockApplyForSourceMutation(UIView *host) {
+    if (!host || !LGIsClockHost(host)) return;
+    if (LGIsModernClockHost(host) && host.window) {
+        LGScheduleClockApply(host, NO, 1.0 / 30.0);
+        return;
+    }
+    LGApplyClockReplacement(host);
 }
 
 static void LGRefreshClockHosts(void) {
@@ -2648,18 +2626,14 @@ void LGRefreshAllClockHosts(void) {
 - (void)didMoveToWindow {
     %orig;
     UIView *self_ = (UIView *)self;
-    LGDebugLog(@"clock attach kind=modern host=%@ window=%d frame=%@",
-               NSStringFromClass([(UIView *)self class]),
-               ((UIView *)self).window != nil,
-               NSStringFromCGRect(((UIView *)self).frame));
-    if (self_.window) LGScheduleClockApply(self_);
+    if (self_.window) LGScheduleClockApply(self_, YES, 0.0);
     else LGApplyClockReplacement(self_);
 }
 
 - (void)layoutSubviews {
     %orig;
     UIView *self_ = (UIView *)self;
-    if (self_.window) LGScheduleClockApply(self_);
+    if (self_.window) LGScheduleClockApply(self_, NO, 1.0 / 30.0);
 }
 
 %end
@@ -2669,10 +2643,6 @@ void LGRefreshAllClockHosts(void) {
 - (void)didMoveToWindow {
     %orig;
     UIView *self_ = (UIView *)self;
-    LGDebugLog(@"clock attach kind=legacy host=%@ window=%d frame=%@",
-               NSStringFromClass([(UIView *)self class]),
-               ((UIView *)self).window != nil,
-               NSStringFromCGRect(((UIView *)self).frame));
     LGPositionLegacyDateSubtitleForClockHost(self_);
     LGApplyClockReplacement(self_);
 }
@@ -2740,7 +2710,7 @@ void LGRefreshAllClockHosts(void) {
 
 - (void)layoutSubviews {
     %orig;
-    LGRelayoutLegacyNotificationListView((UIView *)self);
+    LGScheduleLegacyNotificationListRelayout((UIView *)self);
 }
 
 %end
@@ -2920,7 +2890,7 @@ void LGRefreshAllClockHosts(void) {
     if (LGIsModernClockSourceLabel((UIView *)self) || LGIsLegacyClockTextLabel((UIView *)self)) {
         UIView *host = self.superview;
         while (host && !LGIsClockHost(host)) host = host.superview;
-        if (host) LGApplyClockReplacement(host);
+        if (host) LGRequestClockApplyForSourceMutation(host);
     }
 }
 
@@ -2929,7 +2899,7 @@ void LGRefreshAllClockHosts(void) {
     if (LGIsModernClockSourceLabel((UIView *)self) || LGIsLegacyClockTextLabel((UIView *)self)) {
         UIView *host = self.superview;
         while (host && !LGIsClockHost(host)) host = host.superview;
-        if (host) LGApplyClockReplacement(host);
+        if (host) LGRequestClockApplyForSourceMutation(host);
     }
 }
 

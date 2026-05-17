@@ -34,6 +34,7 @@ static NSString * const LGPrefsDidReloadInProcessNotification = @"dylv.liquidass
 static NSDictionary<NSString *, id> *sLGCachedPreferences = nil;
 static os_unfair_lock sLGPrefsLock = OS_UNFAIR_LOCK_INIT;
 static dispatch_once_t sLGPrefsSetupOnce;
+static dispatch_once_t sLGPrefsWriteQueueOnce;
 static dispatch_queue_t sLGPrefsWriteQueue;
 static dispatch_queue_t sLGLogQueue;
 static NSFileHandle *sLGLogHandle;
@@ -46,6 +47,7 @@ static BOOL sLGDynamicDefaultFlushScheduled = NO;
 static CFTimeInterval sLGProfileWindowStart = 0.0;
 static const CFTimeInterval kLGProfileFlushInterval = 2.0;
 static const CFTimeInterval kLGDynamicDefaultFlushDelay = 0.25;
+static const unsigned long long kLGLogMaxFileSize = 10ULL * 1024ULL * 1024ULL;
 
 static void LGCloseLogHandle(void) {
     if (!sLGLogHandle) return;
@@ -76,7 +78,35 @@ static NSString *LGLogFilePath(void) {
     return sPath;
 }
 
-static void LGAppendLogLine(NSString *line) {
+static dispatch_queue_t LGPrefsWriteQueue(void) {
+    dispatch_once(&sLGPrefsWriteQueueOnce, ^{
+        sLGPrefsWriteQueue = dispatch_queue_create("dylv.liquidass.prefswrite", DISPATCH_QUEUE_SERIAL);
+    });
+    return sLGPrefsWriteQueue;
+}
+
+static void LGTrimLogFileIfNeeded(NSString *path, NSUInteger incomingLength) {
+    if (!path.length || incomingLength == 0) return;
+
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSDictionary<NSFileAttributeKey, id> *attributes = [fm attributesOfItemAtPath:path error:nil];
+    unsigned long long currentSize = attributes.fileSize;
+    if (currentSize + incomingLength <= kLGLogMaxFileSize) return;
+
+    LGCloseLogHandle();
+
+    NSData *existingData = [NSData dataWithContentsOfFile:path];
+    NSUInteger keepLength = (NSUInteger)MIN((unsigned long long)existingData.length, kLGLogMaxFileSize / 2ULL);
+    NSData *tailData = keepLength > 0 ? [existingData subdataWithRange:NSMakeRange(existingData.length - keepLength, keepLength)] : NSData.data;
+    NSMutableData *trimmedData = [NSMutableData data];
+    NSString *marker = [NSString stringWithFormat:@"[LiquidAss] log truncated at %@\n", [NSDate date]];
+    NSData *markerData = [marker dataUsingEncoding:NSUTF8StringEncoding];
+    if (markerData.length) [trimmedData appendData:markerData];
+    if (tailData.length) [trimmedData appendData:tailData];
+    [trimmedData writeToFile:path atomically:YES];
+}
+
+static void LGAppendLogLine(NSString *line, BOOL capped) {
     NSString *path = LGLogFilePath();
     if (!path.length || !line.length) return;
 
@@ -100,6 +130,9 @@ static void LGAppendLogLine(NSString *line) {
         NSData *data = [line dataUsingEncoding:NSUTF8StringEncoding];
         if (!data.length) {
             return;
+        }
+        if (capped) {
+            LGTrimLogFileIfNeeded(path, data.length);
         }
 
         if (!sLGLogHandle) {
@@ -148,16 +181,12 @@ static NSDictionary<NSString *, id> *LGCopyPreferencesDictionary(void) {
 }
 
 static void LGScheduleDynamicDefaultFlush(void) {
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        sLGPrefsWriteQueue = dispatch_queue_create("dylv.liquidass.prefswrite", DISPATCH_QUEUE_SERIAL);
-    });
-
-    dispatch_async(sLGPrefsWriteQueue, ^{
+    dispatch_queue_t queue = LGPrefsWriteQueue();
+    dispatch_async(queue, ^{
         if (sLGDynamicDefaultFlushScheduled) return;
         sLGDynamicDefaultFlushScheduled = YES;
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kLGDynamicDefaultFlushDelay * NSEC_PER_SEC)),
-                       sLGPrefsWriteQueue, ^{
+                       queue, ^{
             NSDictionary<NSString *, NSNumber *> *pending = [sLGPendingDynamicDefaultWrites copy];
             sLGPendingDynamicDefaultWrites = nil;
             sLGDynamicDefaultFlushScheduled = NO;
@@ -246,7 +275,7 @@ NSArray<UIWindow *> *LGApplicationWindows(UIApplication *app) {
         return windows;
     }
 
-    NSArray<UIWindow *> *windows = LGApplicationWindows(app);
+    NSArray<UIWindow *> *windows = [app windows];
     return [windows isKindOfClass:[NSArray class]] ? windows : @[];
 }
 
@@ -338,11 +367,7 @@ void LGCacheDynamicDefaultFloat(NSString *key, CGFloat value) {
     sLGCachedPreferences = [mutablePrefs copy];
     os_unfair_lock_unlock(&sLGPrefsLock);
 
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        sLGPrefsWriteQueue = dispatch_queue_create("dylv.liquidass.prefswrite", DISPATCH_QUEUE_SERIAL);
-    });
-    dispatch_async(sLGPrefsWriteQueue, ^{
+    dispatch_async(LGPrefsWriteQueue(), ^{
         if (!sLGPendingDynamicDefaultWrites) {
             sLGPendingDynamicDefaultWrites = [NSMutableDictionary dictionary];
         }
@@ -353,7 +378,8 @@ void LGCacheDynamicDefaultFloat(NSString *key, CGFloat value) {
 
 NSString *LGDefaultRenderingModeForKey(NSString *key) {
     if ([key isEqualToString:@"Banner.RenderingMode"] ||
-        [key isEqualToString:@"ControlCenter.RenderingMode"]) {
+        [key isEqualToString:@"ControlCenter.RenderingMode"] ||
+        ([key hasPrefix:@"CustomViews.Rule."] && [key hasSuffix:@".RenderingMode"])) {
         return LGRenderingModeLiveCapture;
     }
     return LGRenderingModeSnapshot;
@@ -373,7 +399,7 @@ void LGLog(NSString *format, ...) {
     NSString *message = [[NSString alloc] initWithFormat:format arguments:args];
     va_end(args);
     NSLog(@"[LiquidAss] %@", message);
-    LGAppendLogLine([NSString stringWithFormat:@"[LiquidAss] %@\n", message]);
+    LGAppendLogLine([NSString stringWithFormat:@"[LiquidAss] %@\n", message], YES);
 }
 
 void LGDebugLog(NSString *format, ...) {
@@ -385,7 +411,8 @@ void LGDebugLog(NSString *format, ...) {
     va_start(args, format);
     NSString *message = [[NSString alloc] initWithFormat:format arguments:args];
     va_end(args);
-    LGLog(@"%@", message);
+    NSLog(@"[LiquidAss] %@", message);
+    LGAppendLogLine([NSString stringWithFormat:@"[LiquidAss] %@\n", message], NO);
 }
 
 void LGAssertMainThread(void) {
@@ -632,8 +659,10 @@ void LGSetImageStableCacheKey(UIImage *image, NSString *cacheKey) {
 
 id<MTLLibrary> LGCreateGlassLibrary(id<MTLDevice> device, NSError **error) {
     if (!device) return nil;
+    MTLCompileOptions *options = [MTLCompileOptions new];
+    options.fastMathEnabled = YES;
     id<MTLLibrary> library = [device newLibraryWithSource:LGGlassMetalSource()
-                                                  options:[MTLCompileOptions new]
+                                                  options:options
                                                     error:error];
     return library;
 }

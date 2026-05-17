@@ -79,7 +79,8 @@ static const CFTimeInterval kLGBackButtonRefreshInterval = 1.0 / 30.0;
             [blurFilter setValue:@YES forKey:@"inputNormalizeEdges"];
             layer.filters = @[blurFilter];
         }
-    } @catch (__unused NSException *exception) {
+    } @catch (NSException *exception) {
+        LGDebugLog(@"low blur backdrop configure failed %@ %@", exception.name, exception.reason);
     }
 }
 
@@ -106,7 +107,8 @@ static void LGClampLowBlurOnObject(id object) {
             if (clamped != value) {
                 [object setValue:clamped forKey:key];
             }
-        } @catch (__unused NSException *exception) {
+        } @catch (NSException *exception) {
+            LGDebugLog(@"low blur clamp failed key=%@ %@ %@", key, exception.name, exception.reason);
         }
     }
 }
@@ -123,7 +125,8 @@ static void LGApplyLowBlurRadiusToLayer(CALayer *layer) {
     LGClampLowBlurFilterArray(layer.filters);
     @try {
         LGClampLowBlurFilterArray([layer valueForKey:@"backgroundFilters"]);
-    } @catch (__unused NSException *exception) {
+    } @catch (NSException *exception) {
+        LGDebugLog(@"low blur background filter read failed %@ %@", exception.name, exception.reason);
     }
     for (CALayer *sublayer in layer.sublayers) {
         LGApplyLowBlurRadiusToLayer(sublayer);
@@ -132,16 +135,8 @@ static void LGApplyLowBlurRadiusToLayer(CALayer *layer) {
 
 void LGApplyLowBlurRadiusToView(UIView *view) {
     if (!view) return;
-    LGApplyLowBlurRadiusToLayer(view.layer);
-    for (UIView *subview in view.subviews) {
-        LGApplyLowBlurRadiusToView(subview);
-    }
-
     dispatch_async(dispatch_get_main_queue(), ^{
         LGApplyLowBlurRadiusToLayer(view.layer);
-        for (UIView *subview in view.subviews) {
-            LGApplyLowBlurRadiusToLayer(subview.layer);
-        }
     });
 }
 

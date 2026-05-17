@@ -3,6 +3,7 @@
 #import "../../Shared/LGBannerCaptureSupport.h"
 #import "../../Shared/LGPrefAccessors.h"
 #import <objc/runtime.h>
+#import <QuartzCore/QuartzCore.h>
 
 static UIImage *sCachedLockSnapshot = nil;
 static void *kLockAttachedKey = &kLockAttachedKey;
@@ -126,8 +127,9 @@ void LGInvalidateLockscreenSnapshotCache(void) {
 
 UIImage *LGGetLockscreenSnapshotCached(void) {
     LGAssertMainThread();
-    if (!sCachedLockSnapshot)
+    if (!sCachedLockSnapshot) {
         sCachedLockSnapshot = LG_getLockscreenSnapshot();
+    }
     return sCachedLockSnapshot;
 }
 

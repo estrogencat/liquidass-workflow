@@ -61,16 +61,17 @@ static NSInteger LG_preferredFPSForUpdateGroup(LGUpdateGroup group) {
 
 static id<MTLDevice>               sDevice;
 static id<MTLRenderPipelineState>  sPipeline;
-static id<MTLCommandQueue>         sCommandQueues[LGUpdateGroupWidgets + 1];
+static id<MTLCommandQueue>         sCommandQueue;
 static NSMapTable *sTextureCache = nil;
 static NSMutableDictionary<NSNumber *, MPSImageGaussianBlur *> *sBlurKernelCache = nil;
+static NSMutableArray<NSNumber *> *sBlurKernelLRUKeys = nil;
 static id<MTLTexture> sOpaqueMaskTexture = nil;
 static dispatch_once_t sRuntimeInitOnce;
 static atomic_bool sRuntimeReady = false;
+static const NSUInteger kLGBlurKernelCacheLimit = 16;
 
-static id<MTLCommandQueue> LGCommandQueueForUpdateGroup(LGUpdateGroup group) {
-    NSInteger index = (group >= LGUpdateGroupAll && group <= LGUpdateGroupWidgets) ? group : LGUpdateGroupAll;
-    return sCommandQueues[index] ?: sCommandQueues[LGUpdateGroupAll];
+static id<MTLCommandQueue> LGCommandQueueForUpdateGroup(__unused LGUpdateGroup group) {
+    return sCommandQueue;
 }
 
 static BOOL LGEnsureRuntimeReady(void) {
@@ -85,6 +86,7 @@ static void LG_clearTextureCache(void) {
 void LGClearGlassTextureCache(void) {
     LG_clearTextureCache();
     [sBlurKernelCache removeAllObjects];
+    [sBlurKernelLRUKeys removeAllObjects];
 }
 
 static LGTextureCacheEntry *LG_getCacheForImage(UIImage *image, CGFloat scale) {
@@ -104,13 +106,24 @@ static void LG_setCacheForImage(UIImage *image, CGFloat scale, LGTextureCacheEnt
 static MPSImageGaussianBlur *LGGaussianBlurKernelForSigma(float sigma) {
     if (!sBlurKernelCache) {
         sBlurKernelCache = [NSMutableDictionary dictionary];
+        sBlurKernelLRUKeys = [NSMutableArray array];
     }
     NSNumber *key = LGBlurSettingKey(sigma);
     MPSImageGaussianBlur *kernel = sBlurKernelCache[key];
-    if (kernel) return kernel;
+    if (kernel) {
+        [sBlurKernelLRUKeys removeObject:key];
+        [sBlurKernelLRUKeys addObject:key];
+        return kernel;
+    }
+    while (sBlurKernelCache.count >= kLGBlurKernelCacheLimit && sBlurKernelLRUKeys.count > 0) {
+        NSNumber *oldestKey = sBlurKernelLRUKeys.firstObject;
+        [sBlurKernelCache removeObjectForKey:oldestKey];
+        [sBlurKernelLRUKeys removeObjectAtIndex:0];
+    }
     kernel = [[MPSImageGaussianBlur alloc] initWithDevice:sDevice sigma:sigma];
     kernel.edgeMode = MPSImageEdgeModeClamp;
     sBlurKernelCache[key] = kernel;
+    [sBlurKernelLRUKeys addObject:key];
     return kernel;
 }
 
@@ -135,13 +148,10 @@ void LGPrewarmPipelines(void) {
             return;
         }
 
-        sCommandQueues[LGUpdateGroupAll] = [sDevice newCommandQueue];
-        if (!sCommandQueues[LGUpdateGroupAll]) {
+        sCommandQueue = [sDevice newCommandQueue];
+        if (!sCommandQueue) {
             LGLog(@"metal command queue creation failed");
             return;
-        }
-        for (NSInteger group = LGUpdateGroupDock; group <= LGUpdateGroupWidgets; group++) {
-            sCommandQueues[group] = [sDevice newCommandQueue] ?: sCommandQueues[LGUpdateGroupAll];
         }
 
         LG_clearTextureCache();

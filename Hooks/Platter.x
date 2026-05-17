@@ -8,6 +8,7 @@ static void *kLockOriginalTextColorKey = &kLockOriginalTextColorKey;
 static void *kBannerBackdropViewKey = &kBannerBackdropViewKey;
 static void *kBannerAttachedKey = &kBannerAttachedKey;
 static void *kBannerLastLiveCaptureTimeKey = &kBannerLastLiveCaptureTimeKey;
+static void *kLockMaterialUpdatePendingKey = &kLockMaterialUpdatePendingKey;
 // Banner lifetime is tracked by the weak host registry, so this state only uses link/driver.
 static LGDisplayLinkState sBannerDisplayLinkState = {0};
 static NSHashTable<UIView *> *sBannerHosts = nil;
@@ -322,6 +323,59 @@ static void updateSeamlessLabelColor(UILabel *label) {
     }
 }
 
+static void LGProcessLockscreenMaterialHost(UIView *view) {
+    if (!view.window) {
+        LGDetachBannerHostIfNeeded(view);
+        LGDetachLockHostIfNeeded(view);
+        return;
+    }
+
+    if (isPrimaryPlatterMaterialHost(view)) {
+        if (isBannerPlatterHost(view)) {
+            LGInjectBannerPlatterGlass(view);
+            if (LGBannerEnabled()) LGAttachBannerHostIfNeeded(view);
+            else LGDetachBannerHostIfNeeded(view);
+        } else {
+            if (LGNotificationGlassEnabled()) {
+                LGLockscreenInjectGlass(view, LGLockscreenCornerRadius());
+                LGAttachLockHostIfNeeded(view);
+            } else {
+                LGCleanupLockscreenHost(view);
+            }
+        }
+        return;
+    }
+
+    if (isPrimaryActionButtonMaterialHost(view)) {
+        if (LGNotificationGlassEnabled()) {
+            LGLockscreenInjectGlass(view, LGNotificationActionButtonCornerRadius(view));
+            LGAttachLockHostIfNeeded(view);
+        } else {
+            LGCleanupLockscreenHost(view);
+        }
+    }
+}
+
+static void LGScheduleLockscreenMaterialHostUpdate(UIView *view) {
+    if (!view || !view.window) return;
+    if ([objc_getAssociatedObject(view, kLockMaterialUpdatePendingKey) boolValue]) {
+        return;
+    }
+    objc_setAssociatedObject(view, kLockMaterialUpdatePendingKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+    __weak UIView *weakView = view;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.035 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        UIView *strongView = weakView;
+        if (!strongView) return;
+        objc_setAssociatedObject(strongView, kLockMaterialUpdatePendingKey, nil, OBJC_ASSOCIATION_ASSIGN);
+        if (!strongView.window || strongView.hidden || strongView.alpha <= 0.01f || strongView.layer.opacity <= 0.01f) {
+            return;
+        }
+        LGProcessLockscreenMaterialHost(strongView);
+    });
+}
+
 void LGLockscreenRefreshAllHosts(void) {
     UIApplication *app = UIApplication.sharedApplication;
     void (^refreshWindow)(UIWindow *) = ^(UIWindow *window) {
@@ -379,7 +433,8 @@ void LGLockscreenRefreshAllHosts(void) {
 }
 
 void LGLockscreenRefreshAttachedHosts(void) {
-    for (UIView *view in LGLockscreenAttachedHosts()) {
+    NSArray<UIView *> *attachedHosts = LGLockscreenAttachedHosts();
+    for (UIView *view in attachedHosts) {
         if (!view.window) {
             LGCleanupLockscreenHost(view);
             continue;
@@ -436,38 +491,7 @@ void LGLockscreenRefreshAttachedHosts(void) {
     %orig;
     UIView *self_ = (UIView *)self;
     CFTimeInterval profileStart = LGProfileBegin();
-
-    if (!self_.window) {
-        LGDetachBannerHostIfNeeded(self_);
-        LGDetachLockHostIfNeeded(self_);
-        LGProfileEnd(@"platter.inject", profileStart);
-        return;
-    }
-
-    if (isPrimaryPlatterMaterialHost(self_)) {
-        if (isBannerPlatterHost(self_)) {
-            LGInjectBannerPlatterGlass(self_);
-            if (LGBannerEnabled()) LGAttachBannerHostIfNeeded(self_);
-            else LGDetachBannerHostIfNeeded(self_);
-        } else {
-            if (LGNotificationGlassEnabled()) {
-                LGLockscreenInjectGlass(self_, LGLockscreenCornerRadius());
-                LGAttachLockHostIfNeeded(self_);
-            } else {
-                LGCleanupLockscreenHost(self_);
-            }
-        }
-    } else if (isPrimaryActionButtonMaterialHost(self_)) {
-        if (LGNotificationGlassEnabled()) {
-            LGLockscreenInjectGlass(self_, LGNotificationActionButtonCornerRadius(self_));
-            LGAttachLockHostIfNeeded(self_);
-        } else {
-            LGCleanupLockscreenHost(self_);
-        }
-    } else {
-        LGProfileEnd(@"platter.inject", profileStart);
-        return;
-    }
+    LGProcessLockscreenMaterialHost(self_);
     LGProfileEnd(@"platter.inject", profileStart);
 }
 
@@ -486,23 +510,13 @@ void LGLockscreenRefreshAttachedHosts(void) {
             if (LGBannerEnabled()) LGAttachBannerHostIfNeeded(self_);
             else LGDetachBannerHostIfNeeded(self_);
         } else {
-            if (LGNotificationGlassEnabled()) {
-                LGLockscreenInjectGlass(self_, LGLockscreenCornerRadius());
-                LGAttachLockHostIfNeeded(self_);
-            } else {
-                LGCleanupLockscreenHost(self_);
-            }
+            LGScheduleLockscreenMaterialHostUpdate(self_);
         }
         LGProfileEnd(@"platter.inject", profileStart);
         return;
     }
     if (isPrimaryActionButtonMaterialHost(self_)) {
-        if (LGNotificationGlassEnabled()) {
-            LGLockscreenInjectGlass(self_, LGNotificationActionButtonCornerRadius(self_));
-            LGAttachLockHostIfNeeded(self_);
-        } else {
-            LGCleanupLockscreenHost(self_);
-        }
+        LGScheduleLockscreenMaterialHostUpdate(self_);
     }
     LGProfileEnd(@"platter.inject", profileStart);
 }

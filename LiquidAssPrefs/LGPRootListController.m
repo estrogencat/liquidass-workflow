@@ -105,6 +105,7 @@ static NSString *LGFormatRuntimeCacheUsage(unsigned long long bytes) {
         else if ([surface isEqualToString:@"MoreOptions"]) [self openMoreOptions];
         else if ([surface isEqualToString:@"PrefsSettings"]) [self openPrefsSettings];
         else if ([surface isEqualToString:@"Experimental"]) [self openMoreOptions];
+        else if ([surface isEqualToString:@"CustomViews"] || [surface hasPrefix:@"CustomViewRule:"] || [surface isEqualToString:@"LiveCapture"]) [self openMoreOptions];
     });
 }
 
@@ -129,23 +130,8 @@ static NSString *LGFormatRuntimeCacheUsage(unsigned long long bytes) {
 - (void)handleSliderInfoPressed:(UIButton *)sender {
     NSString *controlTitle = objc_getAssociatedObject(sender, kLGControlTitleKey);
     NSString *subtitle = objc_getAssociatedObject(sender, kLGControlSubtitleKey);
-    NSNumber *minNumber = objc_getAssociatedObject(sender, kLGMinValueKey);
-    NSNumber *maxNumber = objc_getAssociatedObject(sender, kLGMaxValueKey);
-    NSNumber *decimalsNumber = objc_getAssociatedObject(sender, kLGDecimalsKey);
 
-    NSInteger decimals = decimalsNumber.integerValue;
-    NSString *rangeText = (minNumber && maxNumber)
-        ? [NSString stringWithFormat:LGLocalized(@"prefs.range_format"),
-           LGFormatSliderValue(minNumber.doubleValue, decimals),
-           LGFormatSliderValue(maxNumber.doubleValue, decimals)]
-        : nil;
-
-    NSMutableArray<NSString *> *parts = [NSMutableArray array];
-    if (subtitle.length) [parts addObject:subtitle];
-    if (rangeText.length) [parts addObject:rangeText];
-    NSString *message = parts.count ? [parts componentsJoinedByString:@"\n\n"] : nil;
-
-    LGPresentInfoSheet(self, (controlTitle.length ? controlTitle : LGLocalized(@"prefs.info.title")), message);
+    LGPresentInfoSheet(self, (controlTitle.length ? controlTitle : LGLocalized(@"prefs.info.title")), subtitle);
 }
 
 - (void)updateMenuAvailability {

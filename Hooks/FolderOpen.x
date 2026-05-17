@@ -77,7 +77,8 @@ static BOOL LGFolderOpenFilterLooksLikeTintFilter(id filter) {
     NSString *name = nil;
     @try {
         name = [filter valueForKey:@"name"];
-    } @catch (__unused NSException *exception) {
+    } @catch (NSException *exception) {
+        LGDebugLog(@"folder open filter name read failed %@ %@", exception.name, exception.reason);
         name = nil;
     }
     if (![name isKindOfClass:[NSString class]]) return NO;
@@ -121,7 +122,8 @@ static void LGStripFolderOpenTintFiltersFromLayerTree(CALayer *layer) {
             NSArray *cleanedBg = LGFolderOpenCleanedFilterArray((NSArray *)rawBackgroundFilters, &removedBg);
             if (removedBg) [layer setValue:cleanedBg forKey:@"backgroundFilters"];
         }
-    } @catch (__unused NSException *exception) {
+    } @catch (NSException *exception) {
+        LGDebugLog(@"folder open background filter strip failed %@ %@", exception.name, exception.reason);
     }
 
     layer.compositingFilter = nil;

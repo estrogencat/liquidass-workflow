@@ -71,7 +71,8 @@ static BOOL LGFilterLooksLikeTintFilter(id filter) {
     NSString *name = nil;
     @try {
         name = [filter valueForKey:@"name"];
-    } @catch (__unused NSException *exception) {
+    } @catch (NSException *exception) {
+        LGDebugLog(@"app library filter name read failed %@ %@", exception.name, exception.reason);
         name = nil;
     }
     if (![name isKindOfClass:[NSString class]]) return NO;
@@ -109,7 +110,8 @@ static void stripTintFiltersFromLayerTree(CALayer *layer) {
             NSArray *cleanedBg = LGCleanedFilterArray((NSArray *)rawBackgroundFilters, &removedBg);
             if (removedBg) [layer setValue:cleanedBg forKey:@"backgroundFilters"];
         }
-    } @catch (__unused NSException *exception) {
+    } @catch (NSException *exception) {
+        LGDebugLog(@"app library background filter strip failed %@ %@", exception.name, exception.reason);
     }
 
     layer.compositingFilter = nil;
