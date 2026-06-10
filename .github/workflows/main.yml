@@ -1,6 +1,8 @@
 name: build
 
 on:
+  schedule:
+    - cron: '0 12 */2 * *'
   push:
     branches: [main]
   pull_request:
@@ -19,10 +21,31 @@ on:
           - roothide
 
 jobs:
+  sync-fork:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Hide Sensitive Inputs
+        uses: levibostian/action-hide-sensitive-inputs@v1
+        
+      - name: Checkout Fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 
+          token: ${{ secrets.MEOW }}
+        
+      - name: Sync Fork with Upstream
+        env:
+          GH_TOKEN: ${{ secrets.MEOW }}
+        run: |
+          gh repo sync ${{ github.repository }} -b ${{ github.ref_name }}
+
   setup:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
+    needs: sync-fork
     steps:
       - name: set matrix
         id: set-matrix
@@ -102,3 +125,11 @@ jobs:
         with:
           name: ${{ matrix.scheme }}-package
           path: packages/*.deb
+
+      - name: Upload to GitHub Releases
+        uses: softprops/action-gh-release@v3.0.0
+        with:
+          token: ${{ secrets.MEOW }}
+          tag_name: nethunter-${{ needs.sync-fork.outputs.timestamp }}
+          files: |
+            build/outputs/apk/release/*.apk
