@@ -65,7 +65,7 @@ jobs:
           fi
 
   build:
-    needs: setup
+    needs: [setup, sync-fork]
     runs-on: macos-latest
     strategy:
       matrix:
