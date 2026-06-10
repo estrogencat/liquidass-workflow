@@ -25,6 +25,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    outputs:
+      timestamp: ${{ steps.time.outputs.timestamp }}
     steps:
       - name: Hide Sensitive Inputs
         uses: levibostian/action-hide-sensitive-inputs@v1
@@ -40,6 +42,11 @@ jobs:
           GH_TOKEN: ${{ secrets.MEOW }}
         run: |
           gh repo sync ${{ github.repository }} -b ${{ github.ref_name }}
+
+      - name: get current time for build date
+        id: time
+        run: |
+          echo "timestamp=$(date +'%Y-%m-%d-%H-%M-%S')" >> $GITHUB_OUTPUT
 
   setup:
     runs-on: ubuntu-latest
@@ -120,16 +127,11 @@ jobs:
             FINALPACKAGE=1 \
             $SCHEME_FLAG
 
-      - name: upload package (${{ matrix.scheme }})
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.scheme }}-package
-          path: packages/*.deb
-
       - name: Upload to GitHub Releases
         uses: softprops/action-gh-release@v3.0.0
         with:
           token: ${{ secrets.MEOW }}
-          tag_name: nethunter-${{ needs.sync-fork.outputs.timestamp }}
+          tag_name: liquidass-${{ needs.sync-fork.outputs.timestamp }}
+          name: "Liquid (Gl)Ass // Automated build Q.O.D ${{ needs.sync-fork.outputs.timestamp }}"
           files: |
-            build/outputs/apk/release/*.apk
+            packages/*.deb
